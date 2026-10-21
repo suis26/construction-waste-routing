@@ -1,0 +1,21 @@
+# ===== 原始成果留档（本地保留，不进入 Pages 站点） =====
+最终成果/
+
+# ===== OS / 编辑器 =====
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.idea/
+.vscode/
+
+# ===== 临时脚本 =====
+_*.js
+_check.js
+_smoke.js
