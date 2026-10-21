@@ -123,11 +123,19 @@ body{
 .srs-vbtn{font-family:var(--serif);font-size:12px;letter-spacing:.08em;color:var(--sumi-2);background:transparent;border:1px solid var(--hair);border-radius:2px;padding:5px 13px;cursor:pointer;transition:all .18s ease}
 .srs-vbtn:hover{border-color:var(--nezumi-2);background:var(--washi-3)}
 .srs-vbtn[aria-pressed=true]{background:var(--ai);border-color:var(--ai);color:#fdfcf9}
-.srs-map .route.anim{stroke-dasharray:7 5;animation:dashflow 1.1s linear infinite}
-@keyframes dashflow{to{stroke-dashoffset:-24}}
-.srs-map .veh{pointer-events:none}
-.srs-map .pulse{animation:pulse 2.2s ease-in-out infinite}
-@keyframes pulse{0%,100%{opacity:.30}50%{opacity:.95}}
+/* 线路：静态底线 + 只描一次的描线层 + 描完以后沿线流动的流动层（不使用移动圆点，避免与设施混淆） */
+.srs-map .route-base{fill:none;opacity:.12;pointer-events:stroke;cursor:pointer}
+.srs-map .route-base.hl{opacity:.55;stroke-width:2.8}
+.srs-map .route-draw{fill:none;stroke-linecap:round;stroke-dasharray:1;stroke-dashoffset:1;opacity:1;animation-name:routedraw,routetrack;animation-timing-function:ease-out,ease;animation-fill-mode:forwards,forwards}
+@keyframes routedraw{to{stroke-dashoffset:0}}
+@keyframes routetrack{to{opacity:.34}}
+.srs-map .route-flow{fill:none;stroke-linecap:round;stroke-dasharray:9 21;opacity:0;animation-name:flowin,routeflow;animation-duration:.4s,1.4s;animation-timing-function:ease,linear;animation-iteration-count:1,infinite;animation-fill-mode:forwards,none}
+@keyframes flowin{to{opacity:1}}
+@keyframes routeflow{to{stroke-dashoffset:-32}}
+@media (prefers-reduced-motion: reduce){
+  .srs-map .route-draw{animation:none;stroke-dashoffset:0}
+  .srs-map .route-flow{animation:none;opacity:.5}
+}
 .srs-compare{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}
 @media(max-width:1080px){.srs-compare{grid-template-columns:1fr}}
 .srs-cmpcard{border:1px solid var(--hair);border-radius:3px;background:var(--washi-2);padding:10px 12px}
@@ -767,32 +775,52 @@ function drawMap(host, state, options) {
     svg.appendChild(cg);
   }
 
-  // 车次路线 + 动态车辆
+  // 车次路线：静态底线 + 只描一次的描线层 + 描完以后沿线流动的流动层（不使用移动圆点，避免与设施混淆）
   const rg = svgEl('g');
   routes.forEach(function (r, idx) {
     const d = options.direct ? directPathD(r, state, pr) : tripPathD(r, state, pr);
     if (!d) return;
-    const p = svgEl('path', {
-      class: 'route' + (animate ? ' anim' : '') + (state.sel && state.sel.kind === 'trip' && options.tag !== 'direct' && state.sel.id === idx ? ' hl' : ''),
+    const color = options.direct ? '#b95c33' : (CAT_COLOR[(state.omap[r.seq[0].id] || {}).cat] || '#4472c4');
+    const hl = state.sel && state.sel.kind === 'trip' && !options.direct && state.sel.id === idx;
+    const width = compact ? 1.3 : 1.6;
+    const delay = (idx * 0.18).toFixed(2) + 's';
+    const drawDur = Math.max(0.7, Math.min(2.2, 0.6 + (r.km || 5) * 0.012)).toFixed(2) + 's';
+    const flowDelay = (parseFloat(delay) + parseFloat(drawDur)).toFixed(2) + 's';
+
+    const base = svgEl('path', {
+      class: 'route-base' + (hl ? ' hl' : ''),
       d: d,
-      stroke: options.direct ? '#b95c33' : (CAT_COLOR[(state.omap[r.seq[0].id] || {}).cat] || '#4472c4'),
-      fill: 'none'
+      stroke: color,
+      'stroke-width': width
     });
-    p.appendChild(svgEl('title')).textContent = (options.direct ? '直送 ' : '车次 ' + (idx + 1) + ' ') +
+    base.appendChild(svgEl('title')).textContent = (options.direct ? '直送 ' : '车次 ' + (idx + 1) + ' ') +
       r.seq.map(function (s) { return s.id; }).join('→') + ' · ' + num(r.km, 1) + 'km · ' + num(r.total) + '元';
-    if (!options.direct) p.addEventListener('click', function () { selectTrip(idx); });
-    rg.appendChild(p);
+    if (!options.direct) base.addEventListener('click', function () { selectTrip(idx); });
+    rg.appendChild(base);
 
     if (animate) {
-      const veh = svgEl('circle', {
-        class: 'veh', r: compact ? 3.6 : 4.6,
-        fill: options.direct ? '#b95c33' : (CAT_COLOR[(state.omap[r.seq[0].id] || {}).cat] || '#4472c4'),
-        stroke: '#fdfcf9', 'stroke-width': 1.1
+      // 一次性描线：pathLength 归一化，dashoffset 从 1 到 0 只跑一次
+      const settleDelay = (parseFloat(delay) + parseFloat(drawDur)).toFixed(2) + 's';
+      const draw = svgEl('path', {
+        class: 'route-draw',
+        d: d,
+        stroke: color,
+        'stroke-width': width + 0.5,
+        pathLength: 1,
+        style: 'animation-delay:' + delay + ',' + settleDelay + ';animation-duration:' + drawDur + 's,.35s'
       });
-      const dur = Math.max(5, Math.min(22, 6 + (r.km || 5) * 0.32)).toFixed(1) + 's';
-      const mo = svgEl('animateMotion', { dur: dur, repeatCount: 'indefinite', rotate: 'auto', path: d });
-      veh.appendChild(mo);
-      rg.appendChild(veh);
+      rg.appendChild(draw);
+
+      // 描完之后：虚线沿线路持续流动
+      const flow = svgEl('path', {
+        class: 'route-flow',
+        d: d,
+        stroke: color,
+        'stroke-width': compact ? 2.3 : 3.1,
+        style: 'animation-delay:' + flowDelay + ', ' + flowDelay + ';animation-duration:.45s,' +
+          Math.max(1.2, Math.min(3.0, 1.3 + (r.km || 5) * 0.014)).toFixed(2) + 's'
+      });
+      rg.appendChild(flow);
     }
   });
   svg.appendChild(rg);
@@ -802,7 +830,7 @@ function drawMap(host, state, options) {
   state.orders.forEach(function (o) {
     const isManual = o.conf < state.params.confGate;
     const dot = svgEl('circle', {
-      class: 'pt' + (animate ? ' pulse' : '') + (state.sel && state.sel.kind === 'order' && state.sel.id === o.id ? ' sel' : ''),
+      class: 'pt' + (state.sel && state.sel.kind === 'order' && state.sel.id === o.id ? ' sel' : ''),
       cx: pr.x(o.lng), cy: pr.y(o.lat), r: compact ? 3.8 : 4.5,
       fill: CAT_COLOR[o.cat] || '#4472c4',
       'fill-opacity': isManual ? 0.35 : 0.95
@@ -832,7 +860,7 @@ function drawMap(host, state, options) {
   const fg = svgEl('g');
   state.facilities.forEach(function (f) {
     const c = svgEl('circle', {
-      class: 'fac' + (animate ? ' pulse' : '') + (state.sel && state.sel.kind === 'fac' && state.sel.id === f.id ? ' sel' : ''),
+      class: 'fac' + (state.sel && state.sel.kind === 'fac' && state.sel.id === f.id ? ' sel' : ''),
       cx: pr.x(f.lng), cy: pr.y(f.lat), r: compact ? 5 : 6, fill: KIND_COLOR[f.kind] || '#546e7a'
     });
     c.appendChild(svgEl('title')).textContent = f.id + ' ' + f.kind + ' (' + f.district + ') · 处理难度 ×' + num(f.difficulty_coeff, 2) + ' · 路况 ' + (f.road_condition || '一般') + '（速度 ×' + num(f.road_speed_factor, 2) + '）';
